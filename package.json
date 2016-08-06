@@ -8,6 +8,14 @@
   },
   "author": "Mark Vayngrib <mark@tradle.io> (http://github.com/mvayngrib)",
   "license": "MIT",
+  "keywords": [
+    "stream",
+    "duplex",
+    "axolotl",
+    "encrypted",
+    "p2p",
+    "peer-to-peer"
+  ],
   "dependencies": {
     "bindall": "^2.0.1",
     "debug": "^2.2.0",
