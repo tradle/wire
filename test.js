@@ -1,34 +1,62 @@
 
 const crypto = require('crypto')
 const test = require('tape')
+const nacl = require('tweetnacl')
 const Wire = require('./')
+const names = ['alice', 'bob', 'carol']
+const users = names.map(name => {
+  return {
+    identity: nacl.box.keyPair(),
+    handshake: nacl.box.keyPair(),
+    // session: new SecretSession(),
+    name: name
+  }
+})
+
+const alice = users[0]
+const bob = users[1]
+const carol = users[2]
 
 test('basic', function (t) {
-  t.plan(2)
+  t.plan(4)
 
-  const a = fakeWire()
-  const b = fakeWire()
-  const msgs = [
-    new Buffer('hey'),
-    new Buffer('ho')
+  const settings = [
+    createWires(),
+    createWires().reverse()
   ]
 
-  b.on('message', function (data) {
-    t.same(msgs.shift(), data)
-  })
+  settings.forEach(function (wires) {
+    const a = wires[0]
+    const b = wires[1]
 
-  a.pipe(b).pipe(a)
+    const msgs = [
+      new Buffer('hey'),
+      new Buffer('ho')
+    ]
 
-  msgs.forEach(function (msg) {
-    a.send(msg)
+    b.on('message', function (data) {
+      t.same(msgs.shift(), data)
+    })
+
+    a.pipe(b).pipe(a)
+
+    msgs.forEach(function (msg) {
+      a.send(msg, function (err) {
+        if (err) throw err
+      })
+    })
   })
 })
 
 test('request', function (t) {
   t.plan(4)
 
-  const a = fakeWire()
-  const b = fakeWire()
+  const wires = createWires()
+  const a = wires[0]
+  const b = wires[1]
+  a.on('error', t.error)
+  b.on('error', t.error)
+
   const msgs = [
     { seq: 1, msg: new Buffer('hey') },
     { seq: 2, msg: new Buffer('ho') }
@@ -61,28 +89,45 @@ test('request', function (t) {
   })
 })
 
-function fakeWire (them) {
-  return new Wire({
-    sign: fakeSign,
-    verify: fakeVerify,
-    ack: 0
+test('prevent impersonation', function (t) {
+  t.plan(1)
+
+  const a = new Wire({
+    identity: alice.identity,
+    theirIdentity: bob.identity.publicKey
   })
-}
 
-function fakeSign (data, cb) {
-  process.nextTick(function () {
-    cb(null, sha256(data))
+  const b = new Wire({
+    identity: carol.identity,
+    theirIdentity: alice.identity.publicKey
   })
-}
 
-function fakeVerify (data, sig, cb) {
-  fakeSign(data, function (err, expected) {
-    if (sig.equals(expected)) return cb()
+  a.on('error', t.pass)
 
-    cb(new Error('invalid sig'))
+  const msgs = [
+    new Buffer('hey'),
+    new Buffer('ho')
+  ]
+
+  a.pipe(b).pipe(a)
+
+  msgs.forEach(function (msg) {
+    a.send(msg)
   })
-}
 
-function sha256 (data) {
-  return crypto.createHash('sha256').update(data).digest()
+  b.on('message', t.fail)
+})
+
+function createWires () {
+  const a = new Wire({
+    identity: alice.identity,
+    theirIdentity: bob.identity.publicKey
+  })
+
+  const b = new Wire({
+    identity: bob.identity,
+    theirIdentity: alice.identity.publicKey
+  })
+
+  return [a, b]
 }
