@@ -24,7 +24,8 @@ const ENCODERS = {
   ]
 }
 
-module.exports = Wire
+module.exports = exports = Wire
+exports.nacl = nacl
 
 /**
  * flow:
@@ -45,7 +46,6 @@ function Wire (opts) {
   this._identityKey = normalizeKey(opts.identity)
   this._theirIdentityKey = normalizeKey(opts.theirIdentity)
   this._handshakeKey = normalizeKey(opts.handshake || nacl.box.keyPair())
-
 
   bindAll(this)
   duplexify.call(this)
