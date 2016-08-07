@@ -85,32 +85,44 @@ function Wire (opts) {
     }
 
     switch (data[0]) {
-    case 0: return self._onhandshake(payload, cb)
-    case 1: return cb(null, payload)
+    case 0:
+      return self._onhandshake(payload, function (err) {
+        if (err) self._debug('failed to process handshake', payload, err)
+        cb()
+      })
+    case 1:
+      return cb(null, payload)
     }
   }
 
   function processPayload (data, enc, cb) {
     data = denormalizeEncrypted(data)
-    self._session.decrypt(data).then(function (result) {
-      const payload = new Buffer(result.cleartext, 'base64')
-      try {
-        var msg = decodePayload(payload)
-      } catch (err) {
-        self._debug('skipping message with invalid payload', data)
-        return cb(err)
-      }
+    self._session.decrypt(data)
+      .then(function (result) {
+        const payload = new Buffer(result.cleartext, 'base64')
+        try {
+          var msg = decodePayload(payload)
+        } catch (err) {
+          self._debug('skipping message with invalid payload', data)
+          return cb(err)
+        }
 
-      self._receiveAck(msg)
-      self._debug('received ' + (payload[0] === 0 ? 'request' : payload[0] === 1 ? 'data' : 'ack'))
+        self._receiveAck(msg)
+        self._debug('received ' + (payload[0] === 0 ? 'request' : payload[0] === 1 ? 'data' : 'ack'))
 
-      switch (payload[0]) {
-      case 0: return self._onrequest(msg, cb)
-      case 1: return self._ondata(msg, cb)
-      default: cb()
-      }
-    }, cb)
-    // .catch(console.error)
+        switch (payload[0]) {
+        case 0: return self._onrequest(msg, cb)
+        case 1: return self._ondata(msg, cb)
+        default: cb()
+        }
+      }, function (err) {
+        self._debug('failed to decrypt message', data, err)
+        cb()
+      })
+      .catch(function (err) {
+        self._debug('error processing message', data, err)
+        cb()
+      })
   }
 }
 
