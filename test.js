@@ -17,6 +17,11 @@ const alice = users[0]
 const bob = users[1]
 const carol = users[2]
 
+process.on('uncaughtException', function (err) {
+  console.error(err.stack)
+  process.exit(1)
+})
+
 test('basic', function (t) {
   t.plan(4)
 

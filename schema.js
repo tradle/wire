@@ -13,6 +13,9 @@ module.exports = require('protocol-buffers')(`
   message Handshake {
     required bytes ephemeralKey = 1;
     required bytes staticKey = 2;
+    // whether the sender has already authenticated
+    // the receiver. If false, the receiver should send its own handshake
+    required bool authenticated = 3;
   }
 
   message Encrypted {

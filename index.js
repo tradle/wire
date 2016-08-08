@@ -60,6 +60,8 @@ function Wire (opts) {
 
   this._debugId = INSTANCE_ID++
   this._debug('role: ' + role)
+  this._debug('identity', this._identityKey.publicKey.toString('hex'))
+  this._debug('handshake', this._handshakeKey.publicKey.toString('hex'))
 
   this._encode = lps.encode()
   this._decode = lps.decode()
@@ -96,7 +98,6 @@ function Wire (opts) {
   }
 
   function processPayload (data, enc, cb) {
-    data = denormalizeEncrypted(data)
     self._session.decrypt(data)
       .then(function (result) {
         const payload = new Buffer(result.cleartext, 'base64')
@@ -158,11 +159,12 @@ Wire.prototype._maybeOpen = function () {
   if (this._initiator == null) this.open()
 }
 
-Wire.prototype.handshake = function (handshake) {
+Wire.prototype.handshake = function () {
   this._debug('sending handshake')
   this._sendCleartext(0, {
     ephemeralKey: new Buffer(this._handshakeKey.publicKey),
-    staticKey: new Buffer(this._identityKey.publicKey)
+    staticKey: new Buffer(this._identityKey.publicKey),
+    authenticated: this._authenticated
   }, true)
 }
 
@@ -196,9 +198,13 @@ Wire.prototype.ack = function (ack) {
 
 Wire.prototype._onhandshake = function (handshake, cb) {
   const self = this
-  if (this._authenticated) return nextTick(cb)
+  if (this._authenticated && handshake.authenticated) {
+    return nextTick(cb)
+  }
 
   if (!handshake.staticKey.equals(this._theirIdentityKey)) {
+    // console.log('their identity', handshake.staticKey.toString('hex'))
+    // console.log('their handshake', handshake.ephemeralKey.toString('hex'))
     this._debug('ignoring handshake from a different identity')
     this.emit('error', new Error('invalid handshake'))
     return cb()
@@ -215,7 +221,7 @@ Wire.prototype._onhandshake = function (handshake, cb) {
       // if (self._initiator) self.handshake()
 
       // TODO: optimize to avoid double-sending handshake
-      self.handshake()
+      if (!handshake.authenticated) self.handshake()
 
       cb()
     }, cb)
@@ -239,7 +245,7 @@ Wire.prototype._sendEncrypted = function (type, msg, cb) {
   this._debug('sending', keyByValue(schema, ENCODERS.payload[type]))
   const buf = encodePayload(type, msg)
   this._session.encrypt(buf.toString('base64')).then(function (result) {
-    self._sendCleartext(1, normalizeEncrypted(result))
+    self._sendCleartext(1, result)
     cb()
   }, cb)
 }
@@ -300,9 +306,16 @@ function decodePayload (data) {
 }
 
 function encode (encoders, type, msg) {
+  for (var p in msg) {
+    var val = msg[p]
+    if (val instanceof Uint8Array) {
+      msg[p] = new Buffer(val)
+    }
+  }
+
   const enc = encoders[type]
   const len = enc ? enc.encodingLength(msg) : 0
-  const buf = Buffer(len + 1)
+  const buf = new Buffer(len + 1)
 
   buf[0] = type
   enc.encode(msg, buf, 1)
@@ -313,26 +326,6 @@ function decode (encoders, data) {
   const type = data[0]
   const enc = encoders[type]
   return enc.decode(data, 1)
-}
-
-function normalizeEncrypted (result) {
-  return {
-    ephemeralKey: new Buffer(result.ephemeralKey, 'base64'),
-    counter: result.counter,
-    previousCounter: result.previousCounter,
-    ciphertext: new Buffer(result.ciphertext, 'base64'),
-    nonce: new Buffer(result.nonce, 'base64')
-  }
-}
-
-function denormalizeEncrypted (result) {
-  return {
-    ephemeralKey: result.ephemeralKey.toString('base64'),
-    counter: result.counter,
-    previousCounter: result.previousCounter,
-    ciphertext: result.ciphertext.toString('base64'),
-    nonce: result.nonce.toString('base64')
-  }
 }
 
 function normalizeKey (key) {
