@@ -43,9 +43,9 @@ function Wire (opts) {
   const self = this
   if (!(this instanceof Wire)) return new Wire(opts)
 
-  this._identityKey = normalizeKey(opts.identity)
-  this._theirIdentityKey = normalizeKey(opts.theirIdentity)
-  this._handshakeKey = normalizeKey(opts.handshake || nacl.box.keyPair())
+  this._identityKey = normalizePrivKey(opts.identity)
+  this._theirIdentityKey = normalizePubKey(opts.theirIdentity)
+  this._handshakeKey = normalizePrivKey(opts.handshake || nacl.box.keyPair())
 
   bindAll(this)
   duplexify.call(this)
@@ -328,13 +328,19 @@ function decode (encoders, data) {
   return enc.decode(data, 1)
 }
 
-function normalizeKey (key) {
+function normalizePrivKey (key) {
   if (key.secretKey) {
     return {
       secretKey: toBuffer(key.secretKey),
       publicKey: toBuffer(key.publicKey)
     }
   }
+
+  return nacl.box.keyPair.fromSecretKey(toBuffer(key))
+}
+
+function normalizePubKey (key) {
+  if (key.publicKey) return key.publicKey
 
   return toBuffer(key)
 }
