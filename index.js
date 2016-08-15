@@ -44,22 +44,19 @@ function Wire (opts) {
   if (!(this instanceof Wire)) return new Wire(opts)
 
   this._identityKey = normalizePrivKey(opts.identity)
-  this._theirIdentityKey = normalizePubKey(opts.theirIdentity)
   this._handshakeKey = normalizePrivKey(opts.handshake || nacl.box.keyPair())
 
   bindAll(this)
   duplexify.call(this)
 
   this._ack = opts.ack || 0
-  const role = getRole(this._identityKey.publicKey, this._theirIdentityKey)
   this._session = new Session()
     .identity(this._identityKey)
     .handshake(this._handshakeKey)
-    .theirIdentity(this._theirIdentityKey)
-    .setRole(role)
+
+  if (opts.theirIdentity) this._setTheirIdentity(opts.theirIdentity)
 
   this._debugId = INSTANCE_ID++
-  this._debug('role: ' + role)
   this._debug('identity', this._identityKey.publicKey.toString('hex'))
   this._debug('handshake', this._handshakeKey.publicKey.toString('hex'))
 
@@ -94,6 +91,8 @@ function Wire (opts) {
       })
     case 1:
       return cb(null, payload)
+    default:
+      return cb()
     }
   }
 
@@ -159,6 +158,21 @@ Wire.prototype._maybeOpen = function () {
   if (this._initiator == null) this.open()
 }
 
+Wire.prototype._setTheirIdentity = function (theirIdentity) {
+  theirIdentity = normalizePubKey(theirIdentity)
+  if (this._theirIdentityKey && !theirIdentity.equals(this._theirIdentityKey)) {
+    throw new Error('refusing to change to a different counterparty')
+  }
+
+  this._theirIdentityKey = theirIdentity
+  const role = getRole(this._identityKey.publicKey, this._theirIdentityKey)
+  this._debug('role: ' + role)
+
+  this._session
+    .theirIdentity(this._theirIdentityKey)
+    .setRole(role)
+}
+
 Wire.prototype.handshake = function () {
   this._debug('sending handshake')
   this._sendCleartext(0, {
@@ -197,20 +211,32 @@ Wire.prototype.ack = function (ack) {
 }
 
 Wire.prototype._onhandshake = function (handshake, cb) {
-  const self = this
   if (this._authenticated && handshake.authenticated) {
     return nextTick(cb)
   }
 
-  if (!handshake.staticKey.equals(this._theirIdentityKey)) {
-    // console.log('their identity', handshake.staticKey.toString('hex'))
-    // console.log('their handshake', handshake.ephemeralKey.toString('hex'))
-    this._debug('ignoring handshake from a different identity')
-    this.emit('error', new Error('invalid handshake'))
-    return cb()
+  this._debug('received handshake')
+  if (this._theirIdentityKey) {
+    if (!handshake.staticKey.equals(this._theirIdentityKey)) {
+      // console.log('their identity', handshake.staticKey.toString('hex'))
+      // console.log('their handshake', handshake.ephemeralKey.toString('hex'))
+      this._debug('ignoring handshake from a different identity')
+      this.emit('error', new Error('invalid handshake'))
+      return cb()
+    }
+
+    return this.acceptHandshake(handshake, cb)
   }
 
-  this._debug('received handshake')
+  this.emit('handshake', handshake)
+  cb()
+}
+
+Wire.prototype.acceptHandshake = function (handshake, cb) {
+  const self = this
+  cb = cb || noop
+
+  this._setTheirIdentity(handshake.staticKey)
   this._session
     .theirHandshake(handshake.ephemeralKey)
     .computeMasterKey()

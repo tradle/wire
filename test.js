@@ -123,6 +123,40 @@ test('prevent impersonation', function (t) {
   b.on('message', t.fail)
 })
 
+test('take calls from strangers', function (t) {
+  t.plan(2)
+
+  const a = new Wire({
+    identity: alice.identity,
+    theirIdentity: bob.identity.publicKey
+  })
+
+  const b = new Wire({
+    identity: bob.identity
+  })
+
+  const msgs = [
+    new Buffer('hey'),
+    new Buffer('ho')
+  ]
+
+  b.on('handshake', function (handshake) {
+    b.acceptHandshake(handshake)
+  })
+
+  b.on('message', function (data) {
+    t.same(msgs.shift(), data)
+  })
+
+  a.pipe(b).pipe(a)
+
+  msgs.forEach(function (msg) {
+    a.send(msg, function (err) {
+      if (err) throw err
+    })
+  })
+})
+
 function createWires () {
   const a = new Wire({
     identity: alice.identity,
