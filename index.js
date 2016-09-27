@@ -43,37 +43,40 @@ function Wire (opts) {
   const self = this
   if (!(this instanceof Wire)) return new Wire(opts)
 
-  this._identityKey = normalizePrivKey(opts.identity)
-  this._handshakeKey = normalizePrivKey(opts.handshake || nacl.box.keyPair())
-
   bindAll(this)
   duplexify.call(this)
 
-  this._ack = opts.ack || 0
-  this._session = new Session()
-    .identity(this._identityKey)
-    .handshake(this._handshakeKey)
-
-  if (opts.theirIdentity) this._setTheirIdentity(opts.theirIdentity)
-
   this._debugId = INSTANCE_ID++
-  this._debug('identity', this._identityKey.publicKey.toString('hex'))
-  this._debug('handshake', this._handshakeKey.publicKey.toString('hex'))
-
   this._encode = lps.encode()
   this._decode = lps.decode()
-  pump(
-    this._decode,
-    through.obj(processEnvelope),
-    through.obj(processPayload)
-  )
-
   this.setReadable(this._encode)
   this.setWritable(this._decode)
 
+  var pipeline = [ this._decode ]
+  this._plaintext = !!opts.plaintext
+  this._authenticated = this._plaintext
+  if (!this._plaintext) {
+    this._identityKey = normalizePrivKey(opts.identity)
+    this._handshakeKey = normalizePrivKey(opts.handshake || nacl.box.keyPair())
+    this._session = new Session()
+      .identity(this._identityKey)
+      .handshake(this._handshakeKey)
+
+    if (opts.theirIdentity) this._setTheirIdentity(opts.theirIdentity)
+
+    pipeline.push(through.obj(processEnvelope))
+
+    this._debug('identity', this._identityKey.publicKey.toString('hex'))
+    this._debug('handshake', this._handshakeKey.publicKey.toString('hex'))
+  }
+
+  this._ack = opts.ack || 0
+
+  pipeline.push(through.obj(processPayload))
+  pump(pipeline)
+
   // set to `true` when the counterparty
   // has authenticated themselves to us
-  this._authenticated = false
 
   function processEnvelope (data, enc, cb) {
     try {
@@ -90,39 +93,39 @@ function Wire (opts) {
         cb()
       })
     case 1:
-      return cb(null, payload)
+      return self._session.decrypt(payload)
+        .then(function (result) {
+          const payload = new Buffer(result.cleartext, 'base64')
+          cb(null, payload)
+        }, function (err) {
+          self._debug('failed to decrypt message', payload, err)
+          cb()
+        })
+        .catch(function (err) {
+          self._debug('error processing message', payload, err)
+          cb()
+        })
     default:
       return cb()
     }
   }
 
-  function processPayload (data, enc, cb) {
-    self._session.decrypt(data)
-      .then(function (result) {
-        const payload = new Buffer(result.cleartext, 'base64')
-        try {
-          var msg = decodePayload(payload)
-        } catch (err) {
-          self._debug('skipping message with invalid payload', data)
-          return cb(err)
-        }
+  function processPayload (payload, enc, cb) {
+    try {
+      var msg = decodePayload(payload)
+    } catch (err) {
+      self._debug('skipping message with invalid payload', payload)
+      return cb(err)
+    }
 
-        self._receiveAck(msg)
-        self._debug('received ' + (payload[0] === 0 ? 'request' : payload[0] === 1 ? 'data' : 'ack'))
+    self._receiveAck(msg)
+    self._debug('received ' + (payload[0] === 0 ? 'request' : payload[0] === 1 ? 'data' : 'ack'))
 
-        switch (payload[0]) {
-        case 0: return self._onrequest(msg, cb)
-        case 1: return self._ondata(msg, cb)
-        default: cb()
-        }
-      }, function (err) {
-        self._debug('failed to decrypt message', data, err)
-        cb()
-      })
-      .catch(function (err) {
-        self._debug('error processing message', data, err)
-        cb()
-      })
+    switch (payload[0]) {
+    case 0: return self._onrequest(msg, cb)
+    case 1: return self._ondata(msg, cb)
+    default: cb()
+    }
   }
 }
 
@@ -175,21 +178,26 @@ Wire.prototype._setTheirIdentity = function (theirIdentity) {
 
 Wire.prototype.handshake = function () {
   this._debug('sending handshake')
-  this._sendCleartext(0, {
+  this._sendEnvelope(0, {
     ephemeralKey: new Buffer(this._handshakeKey.publicKey),
     staticKey: new Buffer(this._identityKey.publicKey),
     authenticated: this._authenticated
   }, true)
 }
 
+Wire.prototype._send = function (tag, data) {
+  var method = this._plaintext ? '_sendCleartext' : '_sendEncrypted'
+  this[method](tag, data)
+}
+
 Wire.prototype.request = function (seq) {
-  this._sendEncrypted(0, {
+  this._send(0, {
     seq: seq
   })
 }
 
 Wire.prototype.send = function (msg, cb) {
-  this._sendEncrypted(1, {
+  this._send(1, {
     ack: this._ack,
     payload: msg
   }, cb)
@@ -205,7 +213,7 @@ Wire.prototype.ack = function (ack) {
   // TODO: include acks in other message
   // if (this._outgoing.length) return // ack in next outgoing message
 
-  this._sendEncrypted(2, {
+  this._send(2, {
     ack: ack
   })
 }
@@ -254,6 +262,11 @@ Wire.prototype.acceptHandshake = function (handshake, cb) {
 }
 
 Wire.prototype._sendCleartext = function (type, msg) {
+  const buf = encodePayload(type, msg)
+  this._encode.write(buf)
+}
+
+Wire.prototype._sendEnvelope = function (type, msg) {
   // this._debug('sending', type === 0 ? 'handshake' : 'encrypted data')
   const encoded = encodeEnvelope(type, msg)
   this._encode.write(encoded)
@@ -264,14 +277,14 @@ Wire.prototype._sendEncrypted = function (type, msg, cb) {
   if (!this._authenticated) {
     this._maybeOpen()
     return this.once('open', function () {
-      self._sendEncrypted(type, msg, cb)
+      self._send(type, msg, cb)
     })
   }
 
   this._debug('sending', keyByValue(schema, ENCODERS.payload[type]))
   const buf = encodePayload(type, msg)
   this._session.encrypt(buf.toString('base64')).then(function (result) {
-    self._sendCleartext(1, result)
+    self._sendEnvelope(1, result)
     cb()
   }, cb)
 }
