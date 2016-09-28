@@ -207,8 +207,7 @@ Wire.prototype.send = function (msg, cb) {
  * specify the last message we've received
  */
 Wire.prototype.ack = function (ack) {
-  if (ack === 0) throw new Error('ack must be a positive integer')
-
+  ack += 1
   this._ack = ack
   // TODO: include acks in other message
   // if (this._outgoing.length) return // ack in next outgoing message
@@ -306,7 +305,7 @@ Wire.prototype._onrequest = function (msg, cb) {
 Wire.prototype._receiveAck = function (msg) {
   // ignore ack 0
   if (msg.ack) {
-    this.emit('ack', msg.ack)
+    this.emit('ack', msg.ack - 1)
   }
 }
 
