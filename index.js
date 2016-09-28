@@ -191,12 +191,16 @@ Wire.prototype._send = function (tag, data) {
 }
 
 Wire.prototype.request = function (seq) {
+  this._debug('sending request')
+
   this._send(0, {
     seq: seq
   })
 }
 
 Wire.prototype.send = function (msg, cb) {
+  this._debug('sending data')
+
   this._send(1, {
     ack: this._ack,
     payload: msg
@@ -207,6 +211,8 @@ Wire.prototype.send = function (msg, cb) {
  * specify the last message we've received
  */
 Wire.prototype.ack = function (ack) {
+  this._debug('sending ack ' + ack)
+
   ack += 1
   this._ack = ack
   // TODO: include acks in other message
@@ -267,8 +273,8 @@ Wire.prototype._sendCleartext = function (type, msg) {
 
 Wire.prototype._sendEnvelope = function (type, msg) {
   // this._debug('sending', type === 0 ? 'handshake' : 'encrypted data')
-  const encoded = encodeEnvelope(type, msg)
-  this._encode.write(encoded)
+  const buf = encodeEnvelope(type, msg)
+  this._encode.write(buf)
 }
 
 Wire.prototype._sendEncrypted = function (type, msg, cb) {
