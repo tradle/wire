@@ -1,12 +1,11 @@
 
 const inherits = require('util').inherits
-const lps = require('length-prefixed-stream')
 const through = require('through2')
 const pump = require('pump')
 const debug = require('debug')('tradle:wire')
 const stream = require('readable-stream')
 const Duplex = stream.Duplex
-const duplexify = require('duplexify')
+// const duplexify = require('duplexify')
 const bindAll = require('bindall')
 const Session = require('forward-secrecy')
 const nacl = require('tweetnacl')
@@ -44,16 +43,21 @@ function Wire (opts) {
   if (!(this instanceof Wire)) return new Wire(opts)
 
   bindAll(this)
-  duplexify.call(this)
+  Duplex.call(this)
 
   this._debugId = INSTANCE_ID++
-  this._encode = lps.encode()
-  this._decode = lps.decode()
-  this.setReadable(this._encode)
-  this.setWritable(this._decode)
+  this.on('pause', function () {
+    self._debug('paused')
+  })
 
-  var pipeline = [ this._decode ]
+  this.on('resume', function () {
+    self._debug('resumed')
+  })
+
   this._plaintext = !!opts.plaintext
+
+  // set to `true` when the counterparty
+  // has authenticated themselves to us
   this._authenticated = this._plaintext
   if (!this._plaintext) {
     this._identityKey = normalizePrivKey(opts.identity)
@@ -64,72 +68,80 @@ function Wire (opts) {
 
     if (opts.theirIdentity) this._setTheirIdentity(opts.theirIdentity)
 
-    pipeline.push(through.obj(processEnvelope))
+    // pipeline.push(through.obj(processEnvelope))
 
     this._debug('identity', this._identityKey.publicKey.toString('hex'))
     this._debug('handshake', this._handshakeKey.publicKey.toString('hex'))
   }
 
   this._ack = opts.ack || 0
+}
 
-  pipeline.push(through.obj(processPayload))
-  pump(pipeline)
+inherits(Wire, Duplex)
 
-  // set to `true` when the counterparty
-  // has authenticated themselves to us
+  // incoming data from another wire
+Wire.prototype._write = function (data, enc, cb) {
+  const self = this
+  if (this._plaintext) return this._processPayload(data, enc, cb)
 
-  function processEnvelope (data, enc, cb) {
-    try {
-      var payload = decodeEnvelope(data)
-    } catch (err) {
-      self._debug('skipping message with invalid envelope', data)
-      return cb()
-    }
+  return this._processEnvelope(data, enc, function (err, payload) {
+    if (err) return cb(err)
+    if (!payload) return cb()
 
-    switch (data[0]) {
-    case 0:
-      return self._onhandshake(payload, function (err) {
-        if (err) self._debug('failed to process handshake', payload, err)
-        cb()
-      })
-    case 1:
-      return self._session.decrypt(payload)
-        .then(function (result) {
-          const payload = new Buffer(result.cleartext, 'base64')
-          cb(null, payload)
-        }, function (err) {
-          self._debug('failed to decrypt message', payload, err)
-          cb()
-        })
-        .catch(function (err) {
-          self._debug('error processing message', payload, err)
-          cb()
-        })
-    default:
-      return cb()
-    }
+    self._processPayload(payload, enc, cb)
+  })
+}
+
+Wire.prototype._processEnvelope = function (data, enc, cb) {
+  const self = this
+  try {
+    var payload = decodeEnvelope(data)
+  } catch (err) {
+    this._debug('skipping message with invalid envelope', data)
+    return cb()
   }
 
-  function processPayload (payload, enc, cb) {
-    try {
-      var msg = decodePayload(payload)
-    } catch (err) {
-      self._debug('skipping message with invalid payload', payload)
-      return cb(err)
-    }
-
-    self._receiveAck(msg)
-    self._debug('received ' + (payload[0] === 0 ? 'request' : payload[0] === 1 ? 'data' : 'ack'))
-
-    switch (payload[0]) {
-    case 0: return self._onrequest(msg, cb)
-    case 1: return self._ondata(msg, cb)
-    default: cb()
-    }
+  switch (data[0]) {
+  case 0:
+    return this._onhandshake(payload, function (err) {
+      if (err) self._debug('failed to process handshake', payload, err)
+      cb()
+    })
+  case 1:
+    return this._session.decrypt(payload)
+      .then(function (result) {
+        const payload = new Buffer(result.cleartext, 'base64')
+        cb(null, payload)
+      }, function (err) {
+        self._debug('failed to decrypt message', payload, err)
+        cb()
+      })
+      .catch(function (err) {
+        self._debug('error processing message', payload, err)
+        cb()
+      })
+  default:
+    return cb()
   }
 }
 
-inherits(Wire, duplexify)
+Wire.prototype._processPayload = function (payload, enc, cb) {
+  try {
+    var msg = decodePayload(payload)
+  } catch (err) {
+    this._debug('skipping message with invalid payload', payload)
+    return cb(err)
+  }
+
+  this._receiveAck(msg)
+  this._debug('received ' + (payload[0] === 0 ? 'request' : payload[0] === 1 ? 'data' : 'ack'))
+
+  switch (payload[0]) {
+  case 0: return this._onrequest(msg, cb)
+  case 1: return this._ondata(msg, cb)
+  default: cb()
+  }
+}
 
 Wire.prototype.end = function () {
   this._debug('end')
@@ -198,13 +210,13 @@ Wire.prototype.request = function (seq) {
   })
 }
 
-Wire.prototype.send = function (msg, cb) {
+Wire.prototype.send = function (msg) {
   this._debug('sending data')
 
   this._send(1, {
     ack: this._ack,
     payload: msg
-  }, cb)
+  })
 }
 
 /**
@@ -268,13 +280,15 @@ Wire.prototype.acceptHandshake = function (handshake, cb) {
 
 Wire.prototype._sendCleartext = function (type, msg) {
   const buf = encodePayload(type, msg)
-  this._encode.write(buf)
+  this.push(buf)
+  // this._encode.write(buf)
 }
 
 Wire.prototype._sendEnvelope = function (type, msg) {
   // this._debug('sending', type === 0 ? 'handshake' : 'encrypted data')
   const buf = encodeEnvelope(type, msg)
-  this._encode.write(buf)
+  // this._encode.write(buf)
+  this.push(buf)
 }
 
 Wire.prototype._sendEncrypted = function (type, msg, cb) {
@@ -406,5 +420,18 @@ function getRole (us, them) {
     }
 
     break
+  }
+}
+
+function ensureCalled (cb, timeout) {
+  var tid = setTimeout(function () {
+    throw new Error('timed out!')
+  }, timeout)
+
+  console.log('hey')
+  return function () {
+    console.log('yay')
+    clearTimeout(tid)
+    cb.apply(this, arguments)
   }
 }

@@ -37,7 +37,7 @@ process.on('uncaughtException', function (err) {
       const b = wires[1]
 
       const msgs = [
-        new Buffer('hey'),
+        new Buffer('hey'.repeat(100000)),
         new Buffer('ho')
       ]
 
