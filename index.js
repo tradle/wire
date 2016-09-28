@@ -84,7 +84,7 @@ Wire.prototype._write = function (data, enc, cb) {
   const self = this
   if (this._plaintext) return this._processPayload(data, enc, cb)
 
-  return this._processEnvelope(data, enc, function (err, payload) {
+  this._processEnvelope(data, enc, function (err, payload) {
     if (err) return cb(err)
     if (!payload) return cb()
 
@@ -139,7 +139,7 @@ Wire.prototype._processPayload = function (payload, enc, cb) {
   switch (payload[0]) {
   case 0: return this._onrequest(msg, cb)
   case 1: return this._ondata(msg, cb)
-  default: cb()
+  default: return cb()
   }
 }
 
@@ -149,10 +149,11 @@ Wire.prototype.end = function () {
 }
 
 Wire.prototype.destroy = function (err) {
+  const self = this
   if (this.destroyed) return
-  this.destroyed = true
+
+  this._destroyed = true
   this._debug('destroy', err)
-  this.emit('close')
   this.end()
 }
 
@@ -162,7 +163,9 @@ Wire.prototype._debug = function () {
   debug.apply(null, args)
 }
 
-Wire.prototype._read = function () {}
+Wire.prototype._read = function () {
+  if (this.destroyed) this.push(null)
+}
 
 Wire.prototype.open = function () {
   this._initiator = true
@@ -281,13 +284,11 @@ Wire.prototype.acceptHandshake = function (handshake, cb) {
 Wire.prototype._sendCleartext = function (type, msg) {
   const buf = encodePayload(type, msg)
   this.push(buf)
-  // this._encode.write(buf)
 }
 
 Wire.prototype._sendEnvelope = function (type, msg) {
   // this._debug('sending', type === 0 ? 'handshake' : 'encrypted data')
   const buf = encodeEnvelope(type, msg)
-  // this._encode.write(buf)
   this.push(buf)
 }
 
