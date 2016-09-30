@@ -46,13 +46,11 @@ function Wire (opts) {
   Duplex.call(this)
 
   this._debugId = INSTANCE_ID++
-  this.on('pause', function () {
-    self._debug('paused')
-  })
-
-  this.on('resume', function () {
-    self._debug('resumed')
-  })
+  // ;['pause', 'resume', 'end', 'finish', 'error', 'close', 'cork', 'uncork', 'drain', 'pipe', 'unpipe'].forEach(function (event) {
+  //   self.on(event, function () {
+  //     self._debug(event.replace(/e$/, '') + 'ed')
+  //   })
+  // })
 
   this._plaintext = !!opts.plaintext
 
@@ -154,6 +152,7 @@ Wire.prototype.destroy = function (err) {
 
   this._destroyed = true
   this._debug('destroy', err)
+  this.push(null)
   this.end()
 }
 
@@ -201,6 +200,9 @@ Wire.prototype.handshake = function () {
 }
 
 Wire.prototype._send = function (tag, data) {
+  if (this._destroyed) return
+
+  this._debug('pushing')
   var method = this._plaintext ? '_sendCleartext' : '_sendEncrypted'
   this[method](tag, data)
 }
@@ -232,6 +234,8 @@ Wire.prototype.ack = function (ack) {
   this._ack = ack
   // TODO: include acks in other message
   // if (this._outgoing.length) return // ack in next outgoing message
+
+  if (this._debugId === 'client-wire-3') debugger
 
   this._send(2, {
     ack: ack
@@ -294,6 +298,8 @@ Wire.prototype._sendEnvelope = function (type, msg) {
 
 Wire.prototype._sendEncrypted = function (type, msg, cb) {
   const self = this
+  if (this._destroyed) throw new Error('this wire is closed')
+
   if (!this._authenticated) {
     this._maybeOpen()
     return this.once('open', function () {
