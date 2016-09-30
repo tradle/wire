@@ -148,7 +148,7 @@ Wire.prototype.end = function () {
 
 Wire.prototype.destroy = function (err) {
   const self = this
-  if (this.destroyed) return
+  if (this._destroyed) return
 
   this._destroyed = true
   this._debug('destroy', err)
@@ -163,7 +163,7 @@ Wire.prototype._debug = function () {
 }
 
 Wire.prototype._read = function () {
-  if (this.destroyed) this.push(null)
+  if (this._destroyed) this.push(null)
 }
 
 Wire.prototype.open = function () {
